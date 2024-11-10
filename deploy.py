@@ -189,7 +189,7 @@ class ParlayUI:
                 st.success(f"Bet submitted for {owner}!")
             else:
                 st.error("Please enter a valid bet and select an owner.")
-
+    
     def show_owner_stats(self):
         st.header("Owner Statistics")
         
@@ -240,14 +240,21 @@ class ParlayUI:
                 "Owner": owner,
                 "Wins": stats["win"],
                 "Losses": stats["loss"],
-                "Win Rate": f"{(stats['win']/(stats['win'] + stats['loss'])*100):.1f}%" if (stats['win'] + stats['loss']) > 0 else "0%",
+                "Win Rate (%)": (stats['win'] / (stats['win'] + stats['loss']) * 100) if (stats['win'] + stats['loss']) > 0 else 0,
                 "Total Bets": stats["win"] + stats["loss"] + stats["pending"]
             }
             for owner, stats in metrics.items() if owner != "TBD"
-        ]).sort_values("Win Rate", ascending=False)
+        ])
+        
+        # Sort by 'Win Rate (%)' descending
+        leaderboard = leaderboard.sort_values("Win Rate (%)", ascending=False)
+        
+        # Add formatted 'Win Rate' column
+        leaderboard["Win Rate"] = leaderboard["Win Rate (%)"].apply(lambda x: f"{x:.1f}%")
+        leaderboard = leaderboard.drop(columns=["Win Rate (%)"])
         
         st.dataframe(leaderboard)
-
+    
     def manage_results(self):
         st.header("Manage Results")
         
@@ -274,20 +281,55 @@ class ParlayUI:
             week_key = selected_week_tuple[0]
             parlay = st.session_state.data["parlay_history"][week_key][0]
             
-            for i, bet in enumerate(parlay["bets"]):
-                st.markdown(f"**Bet {i+1}**: {bet['bet']} ({bet['owner']})")
-                parlay["bets"][i]["result"] = st.selectbox(
-                    f"Result for {bet['owner']}'s bet",
-                    ["PENDING", "WIN", "LOSS"],
-                    index=["PENDING", "WIN", "LOSS"].index(bet["result"].upper())
-                )
+            st.subheader(f"Managing Results for {week_key}")
             
-            if st.button("Save Results"):
+            # Initialize session state for edit mode
+            if 'edit_mode' not in st.session_state:
+                st.session_state.edit_mode = {}
+            
+            for i, bet in enumerate(parlay["bets"]):
+                with st.expander(f"Bet {i+1}: {bet['bet']} ({bet['owner']})"):
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        # Editable fields
+                        new_bet_text = st.text_input(f"Bet {i+1} Text", value=bet["bet"], key=f"bet_text_{week_key}_{i}")
+                        new_owner = st.selectbox(f"Owner for Bet {i+1}", st.session_state.data["settings"]["owners"], index=st.session_state.data["settings"]["owners"].index(bet["owner"]), key=f"bet_owner_{week_key}_{i}")
+                    
+                    with col2:
+                        # Result selection
+                        new_result = st.selectbox(
+                            f"Result for Bet {i+1}",
+                            ["PENDING", "WIN", "LOSS"],
+                            index=["PENDING", "WIN", "LOSS"].index(bet["result"].upper()),
+                            key=f"bet_result_{week_key}_{i}"
+                        )
+                    
+                    with col3:
+                        # Delete button
+                        if st.button(f"Delete Bet {i+1}", key=f"delete_bet_{week_key}_{i}"):
+                            st.session_state.data["parlay_history"][week_key][0]["bets"].pop(i)
+                            self.data.save()
+                            st.success(f"Bet {i+1} deleted.")
+                            st.experimental_rerun()
+                    
+                    # Update the bet details
+                    if st.button(f"Update Bet {i+1}", key=f"update_bet_{week_key}_{i}"):
+                        if new_bet_text and new_owner:
+                            st.session_state.data["parlay_history"][week_key][0]["bets"][i]["bet"] = new_bet_text
+                            st.session_state.data["parlay_history"][week_key][0]["bets"][i]["owner"] = new_owner
+                            st.session_state.data["parlay_history"][week_key][0]["bets"][i]["result"] = new_result
+                            self.data.save()
+                            st.success(f"Bet {i+1} updated.")
+                        else:
+                            st.error("Bet text and owner cannot be empty.")
+            
+            if st.button("Save All Results"):
                 self.data.save()
-                st.success("Results updated!")
+                st.success("All results saved!")
         else:
             st.error("Selected week not found.")
-
+    
     def show_statistics(self):
         st.header("Overall Statistics")
         
@@ -309,36 +351,43 @@ class ParlayUI:
         with col1:
             st.metric("Total Bets", total_bets)
         with col2:
-            st.metric("Win Rate", f"{(wins/(wins+losses)*100):.1f}%" if wins+losses > 0 else "0%")
+            win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+            st.metric("Win Rate", f"{win_rate:.1f}%")
         with col3:
             st.metric("Pending Bets", pending)
-
+    
     def show_history(self):
         st.header("Parlay History")
         
         view = st.radio("View", ["By Week", "All Time"])
         
         if view == "By Week":
-            weeks = sorted(st.session_state.data["parlay_history"].keys())
+            weeks = sorted(st.session_state.data["parlay_history"].keys(), key=lambda x: (int(x.split(' ')[1]), int(x.split(' ')[2])), reverse=True)
             selected_week = st.selectbox("Select Week", weeks)
-            parlays = self.data.get_week_bets(*self.parse_week_key(selected_week))
+            if selected_week:
+                week_num, year = self.parse_week_key(selected_week)
+                parlays = self.data.get_week_bets(week_num, year)
         else:
             parlays = [p for ps in st.session_state.data["parlay_history"].values() for p in ps]
         
         records = []
         for parlay in parlays:
+            week_key = self.get_week_of_parlay(parlay)
             for bet in parlay["bets"]:
                 if bet["owner"] != "TBD":
                     records.append({
-                        "Week": parlay.get("week", ""),
+                        "Week": week_key,
                         "Owner": bet["owner"],
                         "Bet": bet["bet"],
                         "Result": bet["result"]
                     })
         
-        df = pd.DataFrame(records)
-        st.dataframe(df)
-
+        if records:
+            df = pd.DataFrame(records)
+            st.dataframe(df)
+        else:
+            st.info("No bets to display.")
+    
     def reset_history(self):
         st.header("Reset History")
         
@@ -347,7 +396,7 @@ class ParlayUI:
             st.session_state.data["parlay_history"] = {}
             self.data.save()
             st.success("All bets have been reset. History is now empty.")
-
+    
     def parse_week_key(self, week_key):
         try:
             parts = week_key.split(' ')
@@ -357,7 +406,14 @@ class ParlayUI:
         except (IndexError, ValueError):
             st.error("Invalid week format.")
             return None, None
-
+    
+    def get_week_of_parlay(self, parlay):
+        # Find the week key for a given parlay
+        for week_key, parlays in st.session_state.data["parlay_history"].items():
+            if parlay in parlays:
+                return week_key
+        return "Unknown"
+    
     def run(self):
         self.setup_page()
 
