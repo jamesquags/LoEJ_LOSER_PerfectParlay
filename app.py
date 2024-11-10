@@ -4,297 +4,193 @@ from datetime import datetime
 import pandas as pd
 from pathlib import Path
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import numpy as np
 from collections import defaultdict
 import shutil
 
-def load_history():
-    if Path("history.yaml").exists():
-        with open("history.yaml", "r") as file:
-            return yaml.safe_load(file)
-    # Initialize with default settings if history.yaml does not exist
-    return {
-        "parlay_history": {},
-        "settings": {
-            "owners": ["Owner1", "Owner2"],  # Default owners; update as needed
-            "parlay_fee": 10  # Default parlay fee; update as needed
-        }
-    }
-
-def backup_history():
-    backup_dir = Path("backups")
-    backup_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_file = backup_dir / f"history_backup_{timestamp}.yaml"
-    if Path("history.yaml").exists():
-        shutil.copy("history.yaml", backup_file)
-
-def save_history(data):
-    backup_history()  # Create a backup before saving
-    with open("history.yaml", "w") as file:
-        yaml.dump(data, file, sort_keys=False)
-
-def get_week_key(week, year):
-    return f"week_{week}_{year}"
-
-class ParlayTracker:
+class ParlayData:
     def __init__(self):
-        self.data = load_history()
-        self.setup_page()
+        self.data = self.load_history()
+        
+    @staticmethod
+    def load_history():
+        if Path("history.yaml").exists():
+            with open("history.yaml", "r") as file:
+                data = yaml.safe_load(file)
+                return data if {"parlay_history", "settings"} <= set(data.keys()) else ParlayData.get_default_data()
+        return ParlayData.get_default_data()
+    
+    @staticmethod
+    def get_default_data():
+        return {
+            "parlay_history": {},
+            "settings": {
+                "owners": ["James", "Jon", "Matt", "Pat", "Jack", "Jeff", "Sam/Connor", "Enzo", "Dillon", "Cole", "TBD"],
+                "parlay_fee": 20,
+                "parlay_president": "James Quaglia"
+            }
+        }
+    
+    def save(self):
+        backup_dir = Path("backups")
+        backup_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if Path("history.yaml").exists():
+            shutil.copy("history.yaml", backup_dir / f"history_backup_{timestamp}.yaml")
+        with open("history.yaml", "w") as file:
+            yaml.dump(self.data, file, sort_keys=False)
+    
+    def get_week_key(self, week, year):
+        return f"Week {week} {year}"
+    
+    def get_week_bets(self, week, year):
+        week_key = self.get_week_key(week, year)
+        return self.data["parlay_history"].get(week_key, [])
+    
+    def get_owner_bet_for_week(self, owner, week, year):
+        week_bets = self.get_week_bets(week, year)
+        for parlay in week_bets:
+            for bet in parlay["bets"]:
+                if bet["owner"] == owner:
+                    return bet
+        return None
+
+class BetAnalyzer:
+    @staticmethod
+    def classify_bet(bet_text):
+        bet_text = bet_text.lower()
+        if any(x in bet_text for x in ["td scorer", "touchdown"]): return "Touchdown Props"
+        if any(x in bet_text for x in ["under", "over"]): return "Totals"
+        if "sgp" in bet_text: return "Same Game Parlay"
+        if "passing" in bet_text: return "Passing Props"
+        if "@" in bet_text and any(x in bet_text for x in ["+", "-"]): return "Spread"
+        return "Other"
+    
+    @staticmethod
+    def calculate_metrics(parlays):
+        metrics = defaultdict(lambda: {"win": 0, "loss": 0, "pending": 0})
+        for parlay in parlays:
+            for bet in parlay["bets"]:
+                if bet["owner"] != "TBD":
+                    result = bet["result"].lower()
+                    if result in metrics[bet["owner"]]:
+                        metrics[bet["owner"]][result] += 1
+                    else:
+                        st.warning(f"Unexpected result '{bet['result']}' for owner '{bet['owner']}'.")
+        return metrics
+
+class ParlayUI:
+    def __init__(self):
+        self.data = ParlayData()
+        self.analyzer = BetAnalyzer()
         
     def setup_page(self):
-        # Display Logo in Sidebar
-        logo_path = "logo.png"  # Ensure you have a logo.png in your project directory
-        if Path(logo_path).exists():
-            st.sidebar.image(logo_path, use_column_width=True)
-        
         st.title("League of Extraordinary Jabrones")
         st.subheader("Weekly Low Scorer Parlay Tracker")
         
-        page = st.sidebar.selectbox(
-            "Navigation",
-            ["Submit Parlay", "View History", "Manage Results", "Statistics", "Owner Stats", "Leaderboard", "Advanced Analytics", "Import/Export"]
-        )
+        pages = {
+            "Submit Parlay": self.show_submission_form,
+            "View History": self.show_history,
+            "Manage Results": self.manage_results,
+            "Statistics": self.show_statistics,
+            "Owner Stats": self.show_owner_stats,
+            "Leaderboard": self.show_leaderboard,
+            "Reset History": self.reset_history  # Added Reset History page
+        }
         
-        if page == "Submit Parlay":
-            self.show_submission_form()
-        elif page == "View History":
-            self.show_history()
-        elif page == "Manage Results":
-            self.manage_results()
-        elif page == "Statistics":
-            self.show_statistics()
-        elif page == "Owner Stats":
-            self.show_owner_stats()
-        elif page == "Leaderboard":
-            self.show_leaderboard()
-        elif page == "Advanced Analytics":
-            self.show_advanced_analytics()
-        elif page == "Import/Export":
-            self.show_import_export()
+        page = st.sidebar.selectbox("Navigation", list(pages.keys()))
+        pages[page]()
     
     def show_submission_form(self):
         st.header("Submit Weekly Parlay")
         
         col1, col2 = st.columns(2)
         with col1:
-            week = st.number_input("NFL Week", min_value=1, max_value=18, value=1)
-            year = st.number_input("Year", min_value=2024, max_value=2030, value=2024)
+            week = st.number_input("NFL Week", 1, 18, 1)
+            year = st.number_input("Year", 2024, 2030, 2024)
         with col2:
-            owner = st.selectbox("Owner", self.data["settings"].get("owners", ["Owner1", "Owner2"]))
-            date = st.date_input("Date", value=datetime.today())
+            submitter = st.selectbox("Submitter", self.data.data["settings"]["owners"])
+            date = st.date_input("Date", datetime.today())
         
-        total_odds = st.text_input("Total Odds (e.g., +7703)")
+        # Get already submitted bets for this week
+        week_key = self.data.get_week_key(week, year)
+        existing_bets = self.data.get_week_bets(week, year)
+        submitted_owners = {bet["owner"] for parlay in existing_bets for bet in parlay["bets"] if bet["owner"] != "TBD"}
         
-        st.subheader("Enter 10 Bets")
-        bets = []
-        for i in range(10):
-            bet = st.text_input(f"Bet {i+1}")
-            if bet:
-                bets.append({
+        # Show available owners
+        available_owners = [o for o in self.data.data["settings"]["owners"] if o not in submitted_owners]
+        
+        # Removed the Total Odds input
+        # st.text_input("Total Odds")  # Removed
+        
+        # Add detailed syntax instructions
+        st.markdown("""
+        ### How to Format Your Bet:
+        - **Team vs Team Over/Under X.Y**
+          - *Example:* `Under 48.5 Cardinals vs Dolphins`
+        - **Anytime TD Scorer - WR Team @ Team**
+          - *Example:* `Anytime TD Scorer - WR Cardinals @ NE Patriots`
+        - **Spread Bets with SGP (Same Game Parlay)**
+          - *Example:* `+5 3Pks SGP TEN Titans @ DET Lions`
+        - **Multiple Picks with SGP**
+          - *Example:* `2 Picks SGP KC Chiefs @ LA Chargers`
+        - **Any other formats should clearly state the type and details of the bet.**
+        """)
+        
+        bet = st.text_input("Your Bet")
+        owner = st.selectbox("Select Owner", ["TBD"] + available_owners)
+        
+        if st.button("Submit Bet"):
+            if bet and owner != "TBD":
+                if not existing_bets:
+                    # Create new week entry
+                    self.data.data["parlay_history"][week_key] = [{
+                        "owner": submitter,
+                        "date": date.strftime("%Y-%m-%d"),
+                        "total_odds": "+0",  # Placeholder since odds are tracked internally
+                        "bets": [],
+                        "parlay_result": "PENDING"
+                    }]
+                
+                # Add bet to existing parlay
+                new_bet = {
                     "bet": bet,
                     "result": "PENDING",
-                    "owner": "TBD"
-                })
-            
-        if st.button("Submit Parlay"):
-            if len(bets) == 10:
-                week_key = get_week_key(week, year)
+                    "owner": owner
+                }
                 
-                # Initialize the list for the week if it doesn't exist
-                if week_key not in self.data["parlay_history"]:
-                    self.data["parlay_history"][week_key] = []
-                
-                # Check if the owner has already submitted a parlay for this week
-                existing_parlays = self.data["parlay_history"][week_key]
-                owner_submitted = any(parlay["owner"] == owner for parlay in existing_parlays)
-                
-                if owner_submitted:
-                    st.error(f"{owner} has already submitted a parlay for Week {week} {year}.")
-                else:
-                    new_entry = {
-                        "owner": owner,
-                        "date": date.strftime("%Y-%m-%d"),
-                        "total_odds": total_odds,
-                        "bets": bets,
-                        "parlay_result": "PENDING"
-                    }
-                    
-                    self.data["parlay_history"][week_key].append(new_entry)
-                    save_history(self.data)
-                    st.success("Parlay submitted successfully!")
+                self.data.data["parlay_history"][week_key][0]["bets"].append(new_bet)
+                self.data.save()
+                st.success(f"Bet submitted for {owner}!")
             else:
-                st.error("Please enter all 10 bets")
-    
-    def manage_results(self):
-        st.header("Manage Results")
-        
-        # Create a list of all parlays with week and owner for selection
-        all_parlays = []
-        for week_key, parlays in self.data["parlay_history"].items():
-            for idx, parlay in enumerate(parlays):
-                all_parlays.append({
-                    "week_key": week_key,
-                    "week": week_key.split('_')[1],
-                    "year": week_key.split('_')[2],
-                    "owner": parlay["owner"],
-                    "parlay_index": idx
-                })
-        
-        if not all_parlays:
-            st.warning("No parlays to update")
-            return
-        
-        # Selection options as "Week Year - Owner"
-        selection = [f"Week {p['week']} {p['year']} - {p['owner']}" for p in all_parlays]
-        selected = st.selectbox("Select Parlay to Update", selection)
-        
-        # Extract the selected parlay's details
-        selected_index = selection.index(selected)
-        selected_parlay_info = all_parlays[selected_index]
-        week_key = selected_parlay_info["week_key"]
-        parlay_index = selected_parlay_info["parlay_index"]
-        parlay = self.data["parlay_history"][week_key][parlay_index]
-        
-        st.subheader(f"Update Bets for {selected}")
-        
-        for i, bet in enumerate(parlay["bets"]):
-            st.markdown(f"**Bet {i+1}**: {bet['bet']}")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                new_result = st.selectbox(
-                    f"Result for Bet {i+1}",
-                    ["PENDING", "WIN", "LOSS"],
-                    key=f"result_{week_key}_{parlay_index}_{i}",
-                    index=["PENDING", "WIN", "LOSS"].index(bet["result"])
-                )
-                parlay["bets"][i]["result"] = new_result
-                
-            with col2:
-                owners = ["TBD"] + self.data["settings"].get("owners", ["Owner1", "Owner2"])
-                new_owner = st.selectbox(
-                    f"Owner for Bet {i+1}",
-                    owners,
-                    key=f"owner_{week_key}_{parlay_index}_{i}",
-                    index=owners.index(bet["owner"]) if bet["owner"] in owners else 0
-                )
-                parlay["bets"][i]["owner"] = new_owner
-                
-        st.subheader("Update Parlay Result")
-        parlay_result = st.selectbox(
-            "Overall Parlay Result",
-            ["PENDING", "WIN", "LOSS"],
-            index=["PENDING", "WIN", "LOSS"].index(parlay["parlay_result"])
-        )
-        
-        if st.button("Save Updates"):
-            parlay["parlay_result"] = parlay_result
-            save_history(self.data)
-            st.success("Results updated successfully!")
-    
-    def show_statistics(self):
-        st.header("Parlay Statistics")
-        
-        if not self.data["parlay_history"]:
-            st.warning("No data available for statistics")
-            return
-            
-        # Overall Statistics
-        st.subheader("Overall Statistics")
-        total_parlays = sum(len(parlays) for parlays in self.data["parlay_history"].values())
-        total_bets = total_parlays * 10
-        
-        # Calculate win rates
-        parlay_wins = sum(1 for parlays in self.data["parlay_history"].values() for p in parlays if p["parlay_result"] == "WIN")
-        
-        bet_results = []
-        for parlays in self.data["parlay_history"].values():
-            for parlay in parlays:
-                for bet in parlay["bets"]:
-                    if bet["result"] != "PENDING":
-                        bet_results.append(bet["result"])
-        
-        bet_wins = sum(1 for r in bet_results if r == "WIN")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Parlays", total_parlays)
-            st.metric("Parlay Win Rate", f"{(parlay_wins/total_parlays)*100:.1f}%" if total_parlays > 0 else "0%")
-        with col2:
-            st.metric("Total Bets", total_bets)
-            st.metric("Individual Bet Win Rate", f"{(bet_wins/len(bet_results))*100:.1f}%" if bet_results else "0%")
-        with col3:
-            st.metric("Money Collected", f"${total_parlays * self.data['settings'].get('parlay_fee', 10)}")
-            
-        # Visualization of results over time
-        st.subheader("Results Over Time")
-        records = []
-        for week_key, parlays in self.data["parlay_history"].items():
-            for parlay in parlays:
-                records.append({
-                    "Week": week_key,
-                    "Result": parlay["parlay_result"],
-                    "Wins": sum(1 for bet in parlay["bets"] if bet["result"] == "WIN"),
-                    "Losses": sum(1 for bet in parlay["bets"] if bet["result"] == "LOSS")
-                })
-        results_df = pd.DataFrame(records)
-        
-        if not results_df.empty:
-            # Sort weeks in chronological order
-            results_df['Week_Number'] = results_df['Week'].apply(lambda x: int(x.split('_')[1]))
-            results_df = results_df.sort_values('Week_Number')
-            
-            fig = go.Figure()
-            fig.add_trace(go.Bar(x=results_df["Week"], y=results_df["Wins"], name="Wins"))
-            fig.add_trace(go.Bar(x=results_df["Week"], y=results_df["Losses"], name="Losses"))
-            fig.update_layout(barmode='stack', title="Weekly Results Distribution", xaxis_title="Week", yaxis_title="Number of Bets")
-            st.plotly_chart(fig)
-            
-            # Additional Visualization: Parlay Outcomes
-            st.subheader("Parlay Outcomes")
-            outcomes = results_df["Result"].value_counts().reset_index()
-            outcomes.columns = ["Outcome", "Count"]
-            
-            fig_outcomes = px.pie(outcomes, names='Outcome', values='Count', title='Parlay Outcomes Distribution')
-            st.plotly_chart(fig_outcomes)
-        else:
-            st.warning("No results to display.")
-    
+                st.error("Please enter a valid bet and select an owner.")
+
     def show_owner_stats(self):
         st.header("Owner Statistics")
         
-        if not self.data["parlay_history"]:
-            st.warning("No data available for owner statistics")
-            return
-            
-        owner_stats = {owner: {"wins": 0, "losses": 0, "pending": 0} 
-                      for owner in self.data["settings"].get("owners", ["Owner1", "Owner2"])}
+        # Calculate owner stats
+        owner_stats = defaultdict(lambda: {"total_bets": 0, "win": 0, "loss": 0, "pending": 0})
         
-        for parlays in self.data["parlay_history"].values():
+        for parlays in self.data.data["parlay_history"].values():
             for parlay in parlays:
                 for bet in parlay["bets"]:
                     if bet["owner"] != "TBD":
                         owner = bet["owner"]
-                        if owner not in owner_stats:
-                            owner_stats[owner] = {"wins": 0, "losses": 0, "pending": 0}
-                        if bet["result"] == "WIN":
-                            owner_stats[owner]["wins"] += 1
-                        elif bet["result"] == "LOSS":
-                            owner_stats[owner]["losses"] += 1
+                        result = bet["result"].lower()
+                        owner_stats[owner]["total_bets"] += 1
+                        if result in owner_stats[owner]:
+                            owner_stats[owner][result] += 1
                         else:
-                            owner_stats[owner]["pending"] += 1
+                            st.warning(f"Unexpected result '{bet['result']}' for owner '{owner}'.")
         
-        # Convert to DataFrame for display
+        # Create DataFrame for display
         stats_df = pd.DataFrame([
             {
                 "Owner": owner,
-                "Wins": stats["wins"],
-                "Losses": stats["losses"],
+                "Total Bets": stats["total_bets"],
+                "Wins": stats["win"],
+                "Losses": stats["loss"],
                 "Pending": stats["pending"],
-                "Win Rate": f"{(stats['wins']/(stats['wins'] + stats['losses'])*100):.1f}%" if (stats['wins'] + stats['losses']) > 0 else "0%"
+                "Win Rate": f"{(stats['win']/(stats['win'] + stats['loss'])*100):.1f}%" if (stats['win'] + stats['loss']) > 0 else "0%"
             }
             for owner, stats in owner_stats.items()
         ])
@@ -305,1001 +201,143 @@ class ParlayTracker:
         fig = px.bar(stats_df, 
                     x="Owner", 
                     y=["Wins", "Losses", "Pending"],
-                    title="Owner Performance Breakdown",
-                    barmode="stack",
-                    labels={"value": "Number of Bets", "variable": "Result"})
+                    title="Owner Performance",
+                    barmode="stack")
         st.plotly_chart(fig)
-    
+
     def show_leaderboard(self):
         st.header("Leaderboard")
         
-        # Calculate various metrics for each owner
-        owner_metrics = defaultdict(lambda: {
-            "total_bets": 0,
-            "wins": 0,
-            "losses": 0,
-            "pending": 0,
-            "profit": 0,
-            "win_streaks": [],
-            "current_streak": 0,
-            "best_week": {"week": None, "wins": 0},
-            "worst_week": {"week": None, "losses": 0},
-            "favorite_bet_type": defaultdict(int)
-        })
+        metrics = self.analyzer.calculate_metrics(
+            [parlay for parlays in self.data.data["parlay_history"].values() for parlay in parlays]
+        )
         
-        for week_key, parlays in self.data["parlay_history"].items():
-            week_num = int(week_key.split('_')[1])
-            for parlay in parlays:
-                owner = parlay["owner"]
-                # Update best/worst week based on parlay result
-                if parlay["parlay_result"] == "WIN":
-                    owner_metrics[owner]["wins"] += 1
-                elif parlay["parlay_result"] == "LOSS":
-                    owner_metrics[owner]["losses"] += 1
-                else:
-                    owner_metrics[owner]["pending"] += 1
-                
-                # Track parlay results for streaks
-                if parlay["parlay_result"] == "WIN":
-                    owner_metrics[owner]["current_streak"] += 1
-                    owner_metrics[owner]["win_streaks"].append(owner_metrics[owner]["current_streak"])
-                elif parlay["parlay_result"] == "LOSS":
-                    if owner_metrics[owner]["current_streak"] > 0:
-                        owner_metrics[owner]["win_streaks"].append(owner_metrics[owner]["current_streak"])
-                    owner_metrics[owner]["current_streak"] = 0
-                
-                # Track favorite bet types
-                for bet in parlay["bets"]:
-                    bet_type = self.classify_bet_type(bet["bet"])
-                    owner_metrics[owner]["favorite_bet_type"][bet_type] += 1
-                
-                # Update best/worst weeks
-                if parlay["parlay_result"] == "WIN":
-                    if parlay["parlay_result"] == "WIN" and parlay["parlay_result"] > owner_metrics[owner]["best_week"]["wins"]:
-                        owner_metrics[owner]["best_week"] = {
-                            "week": week_key,
-                            "wins": 1  # Assuming each parlay win counts as 1 win
-                        }
-                elif parlay["parlay_result"] == "LOSS":
-                    if parlay["parlay_result"] == "LOSS" and parlay["parlay_result"] > owner_metrics[owner]["worst_week"]["losses"]:
-                        owner_metrics[owner]["worst_week"] = {
-                            "week": week_key,
-                            "losses": 1  # Assuming each parlay loss counts as 1 loss
-                        }
-        
-        # Create leaderboard DataFrame
-        leaderboard_data = []
-        for owner, metrics in owner_metrics.items():
-            total_decided = metrics["wins"] + metrics["losses"]
-            win_rate = (metrics["wins"] / total_decided * 100) if total_decided > 0 else 0
-            best_streak = max(metrics["win_streaks"] + [metrics["current_streak"]], default=0)
-            favorite_bet = max(metrics["favorite_bet_type"].items(), key=lambda x: x[1])[0] if metrics["favorite_bet_type"] else "N/A"
-            
-            best_week = metrics['best_week']
-            worst_week = metrics['worst_week']
-            best_week_str = f"{best_week['wins']} wins ({best_week['week'].split('_')[1]})" if best_week['week'] else "N/A"
-            worst_week_str = f"{worst_week['losses']} losses ({worst_week['week'].split('_')[1]})" if worst_week['week'] else "N/A"
-            
-            leaderboard_data.append({
+        leaderboard = pd.DataFrame([
+            {
                 "Owner": owner,
-                "Win Rate": f"{win_rate:.1f}%",
-                "Wins": metrics["wins"],
-                "Losses": metrics["losses"],
-                "Best Streak": best_streak,
-                "Best Week": best_week_str,
-                "Worst Week": worst_week_str,
-                "Favorite Bet Type": favorite_bet
-            })
+                "Wins": stats["win"],
+                "Losses": stats["loss"],
+                "Win Rate": f"{(stats['win']/(stats['win'] + stats['loss'])*100):.1f}%" if (stats['win'] + stats['loss']) > 0 else "0%",
+                "Total Bets": stats["win"] + stats["loss"] + stats["pending"]
+            }
+            for owner, stats in metrics.items() if owner != "TBD"
+        ]).sort_values("Win Rate", ascending=False)
         
-        df_leaderboard = pd.DataFrame(leaderboard_data)
-        df_leaderboard = df_leaderboard.sort_values("Win Rate", ascending=False)
+        st.dataframe(leaderboard)
+
+    def manage_results(self):
+        st.header("Manage Results")
         
-        # Display leaderboard with tabs for different views
-        tab1, tab2, tab3 = st.tabs(["Main Leaderboard", "Streaks & Records", "Betting Patterns"])
+        weeks = [
+            (week_key, int(week_key.split(' ')[1]), int(week_key.split(' ')[2]))
+            for week_key in self.data.data["parlay_history"].keys()
+        ]
         
-        with tab1:
-            st.dataframe(df_leaderboard[["Owner", "Win Rate", "Wins", "Losses"]])
-            
-            # Visualization of win rates
-            fig = go.Figure(data=[
-                go.Bar(name="Win Rate", 
-                      x=df_leaderboard["Owner"],
-                      y=[float(x.strip('%')) for x in df_leaderboard["Win Rate"]])
-            ])
-            fig.update_layout(title="Owner Win Rates", xaxis_title="Owner", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig)
-        
-        with tab2:
-            streak_data = df_leaderboard[["Owner", "Best Streak", "Worst Week"]]
-            st.dataframe(streak_data)
-            
-            # Best Streak visualization
-            fig = go.Figure(data=[
-                go.Bar(name="Best Streak",
-                      x=streak_data["Owner"],
-                      y=streak_data["Best Streak"])
-            ])
-            fig.update_layout(title="Best Win Streaks by Owner", xaxis_title="Owner", yaxis_title="Best Streak")
-            st.plotly_chart(fig)
-        
-        with tab3:
-            patterns_data = df_leaderboard[["Owner", "Favorite Bet Type"]]
-            st.dataframe(patterns_data)
-            
-            # Betting patterns visualization
-            bet_type_counts = defaultdict(lambda: defaultdict(int))
-            for _, row in df_leaderboard.iterrows():
-                owner = row["Owner"]
-                favorite_bet = row["Favorite Bet Type"]
-                bet_type_counts[favorite_bet][owner] += 1
-            
-            fig = go.Figure()
-            for bet_type, counts in bet_type_counts.items():
-                fig.add_trace(go.Bar(
-                    name=bet_type,
-                    x=list(counts.keys()),
-                    y=list(counts.values())
-                ))
-            fig.update_layout(
-                title="Betting Patterns by Owner",
-                barmode='stack',
-                xaxis_title="Owner",
-                yaxis_title="Number of Favorite Bets"
-            )
-            st.plotly_chart(fig)
-    
-    def show_advanced_analytics(self):
-        st.header("Advanced Analytics")
-        
-        if not self.data["parlay_history"]:
-            st.warning("No data available for advanced analytics")
+        if not weeks:
+            st.warning("No parlays to manage")
             return
+            
+        selected_week_display = st.selectbox(
+            "Select Week",
+            [f"Week {week} {year}" for _, week, year in weeks]
+        )
         
-        tab1, tab2, tab3 = st.tabs(["Trend Analysis", "Correlation Analysis", "Performance Insights"])
+        # Find the corresponding week_key
+        selected_week_tuple = next(
+            (wk for wk in weeks if f"Week {wk[1]} {wk[2]}" == selected_week_display),
+            None
+        )
         
-        with tab1:
-            st.subheader("Win Rate Trends Over Time")
+        if selected_week_tuple:
+            week_key = selected_week_tuple[0]
+            parlay = self.data.data["parlay_history"][week_key][0]
             
-            # Prepare trend data
-            trend_data = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = int(week_key.split('_')[1])
-                total_wins = sum(1 for parlay in parlays if parlay["parlay_result"] == "WIN")
-                total_losses = sum(1 for parlay in parlays if parlay["parlay_result"] == "LOSS")
-                total = total_wins + total_losses
-                win_rate = total_wins / total * 100 if total > 0 else 0
-                
-                trend_data.append({
-                    "Week": week_num,
-                    "Win Rate": win_rate,
-                    "Total Parlays": total
-                })
+            for i, bet in enumerate(parlay["bets"]):
+                st.markdown(f"**Bet {i+1}**: {bet['bet']} ({bet['owner']})")
+                parlay["bets"][i]["result"] = st.selectbox(
+                    f"Result for {bet['owner']}'s bet",
+                    ["PENDING", "WIN", "LOSS"],
+                    index=["PENDING", "WIN", "LOSS"].index(bet["result"].upper())
+                )
             
-            df_trends = pd.DataFrame(trend_data).sort_values("Week")
-            
-            # Rolling average visualization
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=df_trends["Week"],
-                y=df_trends["Win Rate"],
-                mode='lines+markers',
-                name='Weekly Win Rate'
-            ))
-            fig.add_trace(go.Scatter(
-                x=df_trends["Week"],
-                y=df_trends["Win Rate"].rolling(window=3).mean(),
-                mode='lines',
-                name='3-Week Moving Average',
-                line=dict(dash='dash')
-            ))
-            fig.update_layout(title="Win Rate Trends", xaxis_title="Week", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig)
+            if st.button("Save Results"):
+                self.data.save()
+                st.success("Results updated!")
+        else:
+            st.error("Selected week not found.")
+
+    def show_statistics(self):
+        st.header("Overall Statistics")
         
-        with tab2:
-            st.subheader("Correlation Analysis")
-            
-            # Analyze correlations between various metrics
-            corr_data = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                for parlay in parlays:
-                    try:
-                        odds = float(parlay["total_odds"].replace('+', '').replace('-', ''))
-                    except ValueError:
-                        odds = 0
-                    wins = sum(1 for bet in parlay["bets"] if bet["result"] == "WIN")
-                    
-                    corr_data.append({
-                        "Odds": odds,
-                        "Wins": wins,
-                        "Success": 1 if parlay["parlay_result"] == "WIN" else 0
-                    })
-            
-            df_corr = pd.DataFrame(corr_data)
-            
-            if not df_corr.empty and len(df_corr) > 1:
-                # Visualization of odds vs. wins
-                fig = px.scatter(df_corr, 
-                               x="Odds", 
-                               y="Wins",
-                               color="Success",
-                               title="Correlation between Odds and Wins",
-                               labels={"Success": "Parlay Success"})
-                st.plotly_chart(fig)
-                
-                # Calculate and display correlation coefficient
-                correlation = df_corr["Odds"].corr(df_corr["Wins"])
-                st.metric("Correlation between Odds and Wins", f"{correlation:.2f}")
-            else:
-                st.warning("Not enough data for correlation analysis.")
+        total_bets = 0
+        wins = 0
+        losses = 0
+        pending = 0
         
-        with tab3:
-            st.subheader("Performance Insights")
-            
-            # Analyze performance by bet type
-            bet_type_performance = defaultdict(lambda: {"wins": 0, "losses": 0})
-            for parlays in self.data["parlay_history"].values():
-                for parlay in parlays:
-                    for bet in parlay["bets"]:
-                        if bet["result"] != "PENDING":
-                            bet_type = self.classify_bet_type(bet["bet"])
-                            if bet["result"] == "WIN":
-                                bet_type_performance[bet_type]["wins"] += 1
-                            else:
-                                bet_type_performance[bet_type]["losses"] += 1
-            
-            # Calculate and display win rates by bet type
-            performance_data = []
-            for bet_type, stats in bet_type_performance.items():
-                total = stats["wins"] + stats["losses"]
-                win_rate = (stats["wins"] / total * 100) if total > 0 else 0
-                performance_data.append({
-                    "Bet Type": bet_type,
-                    "Win Rate": win_rate,
-                    "Total Bets": total
-                })
-            
-            df_performance = pd.DataFrame(performance_data)
-            
-            if not df_performance.empty:
-                # Visualization of performance by bet type
-                fig = px.bar(df_performance,
-                            x="Bet Type",
-                            y="Win Rate",
-                            color="Total Bets",
-                            title="Performance by Bet Type",
-                            labels={"Win Rate": "Win Rate (%)", "Total Bets": "Total Bets"})
-                st.plotly_chart(fig)
-            else:
-                st.warning("No performance data to display.")
-    
+        for parlays in self.data.data["parlay_history"].values():
+            for parlay in parlays:
+                for bet in parlay["bets"]:
+                    if bet["owner"] != "TBD":
+                        total_bets += 1
+                        if bet["result"].lower() == "win": wins += 1
+                        elif bet["result"].lower() == "loss": losses += 1
+                        else: pending += 1
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Bets", total_bets)
+        with col2:
+            st.metric("Win Rate", f"{(wins/(wins+losses)*100):.1f}%" if wins+losses > 0 else "0%")
+        with col3:
+            st.metric("Pending Bets", pending)
+
     def show_history(self):
         st.header("Parlay History")
         
-        if not self.data["parlay_history"]:
-            st.warning("No parlay history available")
-            return
-            
-        view_type = st.radio("View Type", ["Summary", "Detailed"])
+        view = st.radio("View", ["By Week", "All Time"])
         
-        if view_type == "Summary":
-            records = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = week_key.split("_")[1]
-                year = week_key.split("_")[2]
-                for parlay in parlays:
-                    record = {
-                        "Week": week_num,
-                        "Year": year,
-                        "Owner": parlay["owner"],
-                        "Date": parlay["date"],
-                        "Total Odds": parlay["total_odds"],
-                        "Result": parlay["parlay_result"],
-                        "Wins": sum(1 for bet in parlay["bets"] if bet["result"] == "WIN"),
-                        "Losses": sum(1 for bet in parlay["bets"] if bet["result"] == "LOSS")
-                    }
-                    records.append(record)
-            df = pd.DataFrame(records)
-            df = df.sort_values(["Year", "Week"], ascending=[False, False])
-            
+        if view == "By Week":
+            weeks = sorted(self.data.data["parlay_history"].keys())
+            selected_week = st.selectbox("Select Week", weeks)
+            parlays = self.data.get_week_bets(*self.parse_week_key(selected_week))
         else:
-            records = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = week_key.split("_")[1]
-                year = week_key.split("_")[2]
-                for parlay in parlays:
-                    for i, bet in enumerate(parlay["bets"], 1):
-                        record = {
-                            "Week": week_num,
-                            "Year": year,
-                            "Owner": parlay["owner"],
-                            "Bet Number": i,
-                            "Bet": bet["bet"],
-                            "Result": bet["result"]
-                        }
-                        records.append(record)
-            df = pd.DataFrame(records)
-            df = df.sort_values(["Year", "Week", "Owner", "Bet Number"], ascending=[False, False, True, True])
+            parlays = [p for ps in self.data.data["parlay_history"].values() for p in ps]
         
-        st.dataframe(df)
-        
-        if st.button("Export to CSV"):
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name='parlay_history.csv',
-                mime='text/csv'
-            )
-            st.success("Exported to parlay_history.csv")
-    
-    def show_import_export(self):
-        st.header("Import / Export Data")
-        
-        # Export
-        st.subheader("Export History")
-        if st.button("Export history.yaml"):
-            if Path("history.yaml").exists():
-                with open("history.yaml", "r") as file:
-                    data = file.read()
-                st.download_button(
-                    label="Download history.yaml",
-                    data=data,
-                    file_name="history.yaml",
-                    mime="text/yaml"
-                )
-                st.success("history.yaml exported successfully!")
-            else:
-                st.error("history.yaml does not exist.")
-        
-        # Import
-        st.subheader("Import History")
-        uploaded_file = st.file_uploader("Upload history.yaml", type=["yaml"])
-        if uploaded_file is not None:
-            try:
-                imported_data = yaml.safe_load(uploaded_file)
-                if "parlay_history" in imported_data and "settings" in imported_data:
-                    self.data = imported_data
-                    save_history(self.data)
-                    st.success("History imported successfully!")
-                else:
-                    st.error("Invalid history.yaml format.")
-            except Exception as e:
-                st.error(f"Error importing history.yaml: {e}")
-    
-    def show_leaderboard(self):
-        st.header("Leaderboard")
-        
-        # Calculate various metrics for each owner
-        owner_metrics = defaultdict(lambda: {
-            "total_bets": 0,
-            "wins": 0,
-            "losses": 0,
-            "pending": 0,
-            "profit": 0,
-            "win_streaks": [],
-            "current_streak": 0,
-            "best_week": {"week": None, "wins": 0},
-            "worst_week": {"week": None, "losses": 0},
-            "favorite_bet_type": defaultdict(int)
-        })
-        
-        for week_key, parlays in self.data["parlay_history"].items():
-            week_num = int(week_key.split('_')[1])
-            for parlay in parlays:
-                owner = parlay["owner"]
-                # Update parlay results
-                if parlay["parlay_result"] == "WIN":
-                    owner_metrics[owner]["wins"] += 1
-                elif parlay["parlay_result"] == "LOSS":
-                    owner_metrics[owner]["losses"] += 1
-                else:
-                    owner_metrics[owner]["pending"] += 1
-                
-                # Update streaks
-                if parlay["parlay_result"] == "WIN":
-                    owner_metrics[owner]["current_streak"] += 1
-                    owner_metrics[owner]["win_streaks"].append(owner_metrics[owner]["current_streak"])
-                elif parlay["parlay_result"] == "LOSS":
-                    if owner_metrics[owner]["current_streak"] > 0:
-                        owner_metrics[owner]["win_streaks"].append(owner_metrics[owner]["current_streak"])
-                    owner_metrics[owner]["current_streak"] = 0
-                
-                # Track favorite bet types
-                for bet in parlay["bets"]:
-                    bet_type = self.classify_bet_type(bet["bet"])
-                    owner_metrics[owner]["favorite_bet_type"][bet_type] += 1
-                
-                # Update best/worst weeks based on parlay results
-                if parlay["parlay_result"] == "WIN":
-                    if parlay["parlay_result"] > owner_metrics[owner]["best_week"]["wins"]:
-                        owner_metrics[owner]["best_week"] = {
-                            "week": week_key,
-                            "wins": 1
-                        }
-                elif parlay["parlay_result"] == "LOSS":
-                    if parlay["parlay_result"] > owner_metrics[owner]["worst_week"]["losses"]:
-                        owner_metrics[owner]["worst_week"] = {
-                            "week": week_key,
-                            "losses": 1
-                        }
-        
-        # Create leaderboard DataFrame
-        leaderboard_data = []
-        for owner, metrics in owner_metrics.items():
-            total_decided = metrics["wins"] + metrics["losses"]
-            win_rate = (metrics["wins"] / total_decided * 100) if total_decided > 0 else 0
-            best_streak = max(metrics["win_streaks"] + [metrics["current_streak"]], default=0)
-            favorite_bet = max(metrics["favorite_bet_type"].items(), key=lambda x: x[1])[0] if metrics["favorite_bet_type"] else "N/A"
-            
-            best_week = metrics['best_week']
-            worst_week = metrics['worst_week']
-            best_week_str = f"{best_week['wins']} wins ({best_week['week'].split('_')[1]})" if best_week['week'] else "N/A"
-            worst_week_str = f"{worst_week['losses']} losses ({worst_week['week'].split('_')[1]})" if worst_week['week'] else "N/A"
-            
-            leaderboard_data.append({
-                "Owner": owner,
-                "Win Rate": f"{win_rate:.1f}%",
-                "Wins": metrics["wins"],
-                "Losses": metrics["losses"],
-                "Best Streak": best_streak,
-                "Best Week": best_week_str,
-                "Worst Week": worst_week_str,
-                "Favorite Bet Type": favorite_bet
-            })
-        
-        df_leaderboard = pd.DataFrame(leaderboard_data)
-        df_leaderboard = df_leaderboard.sort_values("Win Rate", ascending=False)
-        
-        # Display leaderboard with tabs for different views
-        tab1, tab2, tab3 = st.tabs(["Main Leaderboard", "Streaks & Records", "Betting Patterns"])
-        
-        with tab1:
-            st.dataframe(df_leaderboard[["Owner", "Win Rate", "Wins", "Losses"]])
-            
-            # Visualization of win rates
-            fig = go.Figure(data=[
-                go.Bar(name="Win Rate", 
-                      x=df_leaderboard["Owner"],
-                      y=[float(x.strip('%')) for x in df_leaderboard["Win Rate"]])
-            ])
-            fig.update_layout(title="Owner Win Rates", xaxis_title="Owner", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig)
-        
-        with tab2:
-            streak_data = df_leaderboard[["Owner", "Best Streak", "Worst Week"]]
-            st.dataframe(streak_data)
-            
-            # Best Streak visualization
-            fig = go.Figure(data=[
-                go.Bar(name="Best Streak",
-                      x=streak_data["Owner"],
-                      y=streak_data["Best Streak"])
-            ])
-            fig.update_layout(title="Best Win Streaks by Owner", xaxis_title="Owner", yaxis_title="Best Streak")
-            st.plotly_chart(fig)
-        
-        with tab3:
-            patterns_data = df_leaderboard[["Owner", "Favorite Bet Type"]]
-            st.dataframe(patterns_data)
-            
-            # Betting patterns visualization
-            bet_type_counts = defaultdict(lambda: defaultdict(int))
-            for _, row in df_leaderboard.iterrows():
-                owner = row["Owner"]
-                favorite_bet = row["Favorite Bet Type"]
-                bet_type_counts[favorite_bet][owner] += 1
-            
-            fig = go.Figure()
-            for bet_type, counts in bet_type_counts.items():
-                fig.add_trace(go.Bar(
-                    name=bet_type,
-                    x=list(counts.keys()),
-                    y=list(counts.values())
-                ))
-            fig.update_layout(
-                title="Betting Patterns by Owner",
-                barmode='stack',
-                xaxis_title="Owner",
-                yaxis_title="Number of Favorite Bets"
-            )
-            st.plotly_chart(fig)
-    
-    def show_advanced_analytics(self):
-        st.header("Advanced Analytics")
-        
-        if not self.data["parlay_history"]:
-            st.warning("No data available for advanced analytics")
-            return
-        
-        tab1, tab2, tab3 = st.tabs(["Trend Analysis", "Correlation Analysis", "Performance Insights"])
-        
-        with tab1:
-            st.subheader("Win Rate Trends Over Time")
-            
-            # Prepare trend data
-            trend_data = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = int(week_key.split('_')[1])
-                total_wins = sum(1 for parlay in parlays if parlay["parlay_result"] == "WIN")
-                total_losses = sum(1 for parlay in parlays if parlay["parlay_result"] == "LOSS")
-                total = total_wins + total_losses
-                win_rate = total_wins / total * 100 if total > 0 else 0
-                
-                trend_data.append({
-                    "Week": week_num,
-                    "Win Rate": win_rate,
-                    "Total Parlays": total
-                })
-            
-            df_trends = pd.DataFrame(trend_data).sort_values("Week")
-            
-            # Rolling average visualization
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=df_trends["Week"],
-                y=df_trends["Win Rate"],
-                mode='lines+markers',
-                name='Weekly Win Rate'
-            ))
-            fig.add_trace(go.Scatter(
-                x=df_trends["Week"],
-                y=df_trends["Win Rate"].rolling(window=3).mean(),
-                mode='lines',
-                name='3-Week Moving Average',
-                line=dict(dash='dash')
-            ))
-            fig.update_layout(title="Win Rate Trends", xaxis_title="Week", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig)
-        
-        with tab2:
-            st.subheader("Correlation Analysis")
-            
-            # Analyze correlations between various metrics
-            corr_data = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                for parlay in parlays:
-                    try:
-                        odds = float(parlay["total_odds"].replace('+', '').replace('-', ''))
-                    except ValueError:
-                        odds = 0
-                    wins = sum(1 for bet in parlay["bets"] if bet["result"] == "WIN")
-                    
-                    corr_data.append({
-                        "Odds": odds,
-                        "Wins": wins,
-                        "Success": 1 if parlay["parlay_result"] == "WIN" else 0
+        records = []
+        for parlay in parlays:
+            for bet in parlay["bets"]:
+                if bet["owner"] != "TBD":
+                    records.append({
+                        "Week": parlay.get("week", ""),
+                        "Owner": bet["owner"],
+                        "Bet": bet["bet"],
+                        "Result": bet["result"]
                     })
-            
-            df_corr = pd.DataFrame(corr_data)
-            
-            if not df_corr.empty and len(df_corr) > 1:
-                # Visualization of odds vs. wins
-                fig = px.scatter(df_corr, 
-                               x="Odds", 
-                               y="Wins",
-                               color="Success",
-                               title="Correlation between Odds and Wins",
-                               labels={"Success": "Parlay Success"})
-                st.plotly_chart(fig)
-                
-                # Calculate and display correlation coefficient
-                correlation = df_corr["Odds"].corr(df_corr["Wins"])
-                st.metric("Correlation between Odds and Wins", f"{correlation:.2f}")
-            else:
-                st.warning("Not enough data for correlation analysis.")
         
-        with tab3:
-            st.subheader("Performance Insights")
-            
-            # Analyze performance by bet type
-            bet_type_performance = defaultdict(lambda: {"wins": 0, "losses": 0})
-            for parlays in self.data["parlay_history"].values():
-                for parlay in parlays:
-                    for bet in parlay["bets"]:
-                        if bet["result"] != "PENDING":
-                            bet_type = self.classify_bet_type(bet["bet"])
-                            if bet["result"] == "WIN":
-                                bet_type_performance[bet_type]["wins"] += 1
-                            else:
-                                bet_type_performance[bet_type]["losses"] += 1
-            
-            # Calculate and display win rates by bet type
-            performance_data = []
-            for bet_type, stats in bet_type_performance.items():
-                total = stats["wins"] + stats["losses"]
-                win_rate = (stats["wins"] / total * 100) if total > 0 else 0
-                performance_data.append({
-                    "Bet Type": bet_type,
-                    "Win Rate": win_rate,
-                    "Total Bets": total
-                })
-            
-            df_performance = pd.DataFrame(performance_data)
-            
-            if not df_performance.empty:
-                # Visualization of performance by bet type
-                fig = px.bar(df_performance,
-                            x="Bet Type",
-                            y="Win Rate",
-                            color="Total Bets",
-                            title="Performance by Bet Type",
-                            labels={"Win Rate": "Win Rate (%)", "Total Bets": "Total Bets"})
-                st.plotly_chart(fig)
-            else:
-                st.warning("No performance data to display.")
-    
-    def show_history(self):
-        st.header("Parlay History")
-        
-        if not self.data["parlay_history"]:
-            st.warning("No parlay history available")
-            return
-            
-        view_type = st.radio("View Type", ["Summary", "Detailed"])
-        
-        if view_type == "Summary":
-            records = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = week_key.split("_")[1]
-                year = week_key.split("_")[2]
-                for parlay in parlays:
-                    record = {
-                        "Week": week_num,
-                        "Year": year,
-                        "Owner": parlay["owner"],
-                        "Date": parlay["date"],
-                        "Total Odds": parlay["total_odds"],
-                        "Result": parlay["parlay_result"],
-                        "Wins": sum(1 for bet in parlay["bets"] if bet["result"] == "WIN"),
-                        "Losses": sum(1 for bet in parlay["bets"] if bet["result"] == "LOSS")
-                    }
-                    records.append(record)
-            df = pd.DataFrame(records)
-            df = df.sort_values(["Year", "Week"], ascending=[False, False])
-            
-        else:
-            records = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = week_key.split("_")[1]
-                year = week_key.split("_")[2]
-                for parlay in parlays:
-                    for i, bet in enumerate(parlay["bets"], 1):
-                        record = {
-                            "Week": week_num,
-                            "Year": year,
-                            "Owner": parlay["owner"],
-                            "Bet Number": i,
-                            "Bet": bet["bet"],
-                            "Result": bet["result"]
-                        }
-                        records.append(record)
-            df = pd.DataFrame(records)
-            df = df.sort_values(["Year", "Week", "Owner", "Bet Number"], ascending=[False, False, True, True])
-        
+        df = pd.DataFrame(records)
         st.dataframe(df)
+
+    def reset_history(self):
+        st.header("Reset History")
         
-        if st.button("Export to CSV"):
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name='parlay_history.csv',
-                mime='text/csv'
-            )
-            st.success("Exported to parlay_history.csv")
-    
-    def show_import_export(self):
-        st.header("Import / Export Data")
-        
-        # Export
-        st.subheader("Export History")
-        if st.button("Export history.yaml"):
-            if Path("history.yaml").exists():
-                with open("history.yaml", "r") as file:
-                    data = file.read()
-                st.download_button(
-                    label="Download history.yaml",
-                    data=data,
-                    file_name="history.yaml",
-                    mime="text/yaml"
-                )
-                st.success("history.yaml exported successfully!")
-            else:
-                st.error("history.yaml does not exist.")
-        
-        # Import
-        st.subheader("Import History")
-        uploaded_file = st.file_uploader("Upload history.yaml", type=["yaml"])
-        if uploaded_file is not None:
-            try:
-                imported_data = yaml.safe_load(uploaded_file)
-                if "parlay_history" in imported_data and "settings" in imported_data:
-                    self.data = imported_data
-                    save_history(self.data)
-                    st.success("History imported successfully!")
-                else:
-                    st.error("Invalid history.yaml format.")
-            except Exception as e:
-                st.error(f"Error importing history.yaml: {e}")
-    
-    def show_leaderboard(self):
-        st.header("Leaderboard")
-        
-        # Calculate various metrics for each owner
-        owner_metrics = defaultdict(lambda: {
-            "total_bets": 0,
-            "wins": 0,
-            "losses": 0,
-            "pending": 0,
-            "profit": 0,
-            "win_streaks": [],
-            "current_streak": 0,
-            "best_week": {"week": None, "wins": 0},
-            "worst_week": {"week": None, "losses": 0},
-            "favorite_bet_type": defaultdict(int)
-        })
-        
-        for week_key, parlays in self.data["parlay_history"].items():
-            week_num = int(week_key.split('_')[1])
-            for parlay in parlays:
-                owner = parlay["owner"]
-                
-                # Update parlay results
-                if parlay["parlay_result"] == "WIN":
-                    owner_metrics[owner]["wins"] += 1
-                elif parlay["parlay_result"] == "LOSS":
-                    owner_metrics[owner]["losses"] += 1
-                else:
-                    owner_metrics[owner]["pending"] += 1
-                
-                # Update streaks
-                if parlay["parlay_result"] == "WIN":
-                    owner_metrics[owner]["current_streak"] += 1
-                    owner_metrics[owner]["win_streaks"].append(owner_metrics[owner]["current_streak"])
-                elif parlay["parlay_result"] == "LOSS":
-                    if owner_metrics[owner]["current_streak"] > 0:
-                        owner_metrics[owner]["win_streaks"].append(owner_metrics[owner]["current_streak"])
-                    owner_metrics[owner]["current_streak"] = 0
-                
-                # Track favorite bet types
-                for bet in parlay["bets"]:
-                    bet_type = self.classify_bet_type(bet["bet"])
-                    owner_metrics[owner]["favorite_bet_type"][bet_type] += 1
-                
-                # Update best week
-                if parlay["parlay_result"] == "WIN":
-                    if parlay["parlay_result"] > owner_metrics[owner]["best_week"]["wins"]:
-                        owner_metrics[owner]["best_week"] = {
-                            "week": week_key,
-                            "wins": 1
-                        }
-                elif parlay["parlay_result"] == "LOSS":
-                    if parlay["parlay_result"] > owner_metrics[owner]["worst_week"]["losses"]:
-                        owner_metrics[owner]["worst_week"] = {
-                            "week": week_key,
-                            "losses": 1
-                        }
-        
-        # Create leaderboard DataFrame
-        leaderboard_data = []
-        for owner, metrics in owner_metrics.items():
-            total_decided = metrics["wins"] + metrics["losses"]
-            win_rate = (metrics["wins"] / total_decided * 100) if total_decided > 0 else 0
-            best_streak = max(metrics["win_streaks"] + [metrics["current_streak"]], default=0)
-            favorite_bet = max(metrics["favorite_bet_type"].items(), key=lambda x: x[1])[0] if metrics["favorite_bet_type"] else "N/A"
-            
-            best_week = metrics['best_week']
-            worst_week = metrics['worst_week']
-            best_week_str = f"{best_week['wins']} wins ({best_week['week'].split('_')[1]})" if best_week['week'] else "N/A"
-            worst_week_str = f"{worst_week['losses']} losses ({worst_week['week'].split('_')[1]})" if worst_week['week'] else "N/A"
-            
-            leaderboard_data.append({
-                "Owner": owner,
-                "Win Rate": f"{win_rate:.1f}%",
-                "Wins": metrics["wins"],
-                "Losses": metrics["losses"],
-                "Best Streak": best_streak,
-                "Best Week": best_week_str,
-                "Worst Week": worst_week_str,
-                "Favorite Bet Type": favorite_bet
-            })
-        
-        df_leaderboard = pd.DataFrame(leaderboard_data)
-        df_leaderboard = df_leaderboard.sort_values("Win Rate", ascending=False)
-        
-        # Display leaderboard with tabs for different views
-        tab1, tab2, tab3 = st.tabs(["Main Leaderboard", "Streaks & Records", "Betting Patterns"])
-        
-        with tab1:
-            st.dataframe(df_leaderboard[["Owner", "Win Rate", "Wins", "Losses"]])
-            
-            # Visualization of win rates
-            fig = go.Figure(data=[
-                go.Bar(name="Win Rate", 
-                      x=df_leaderboard["Owner"],
-                      y=[float(x.strip('%')) for x in df_leaderboard["Win Rate"]])
-            ])
-            fig.update_layout(title="Owner Win Rates", xaxis_title="Owner", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig)
-        
-        with tab2:
-            streak_data = df_leaderboard[["Owner", "Best Streak", "Worst Week"]]
-            st.dataframe(streak_data)
-            
-            # Best Streak visualization
-            fig = go.Figure(data=[
-                go.Bar(name="Best Streak",
-                      x=streak_data["Owner"],
-                      y=streak_data["Best Streak"])
-            ])
-            fig.update_layout(title="Best Win Streaks by Owner", xaxis_title="Owner", yaxis_title="Best Streak")
-            st.plotly_chart(fig)
-        
-        with tab3:
-            patterns_data = df_leaderboard[["Owner", "Favorite Bet Type"]]
-            st.dataframe(patterns_data)
-            
-            # Betting patterns visualization
-            bet_type_counts = defaultdict(lambda: defaultdict(int))
-            for _, row in df_leaderboard.iterrows():
-                owner = row["Owner"]
-                favorite_bet = row["Favorite Bet Type"]
-                bet_type_counts[favorite_bet][owner] += 1
-            
-            fig = go.Figure()
-            for bet_type, counts in bet_type_counts.items():
-                fig.add_trace(go.Bar(
-                    name=bet_type,
-                    x=list(counts.keys()),
-                    y=list(counts.values())
-                ))
-            fig.update_layout(
-                title="Betting Patterns by Owner",
-                barmode='stack',
-                xaxis_title="Owner",
-                yaxis_title="Number of Favorite Bets"
-            )
-            st.plotly_chart(fig)
-    
-    def show_advanced_analytics(self):
-        st.header("Advanced Analytics")
-        
-        if not self.data["parlay_history"]:
-            st.warning("No data available for advanced analytics")
-            return
-        
-        tab1, tab2, tab3 = st.tabs(["Trend Analysis", "Correlation Analysis", "Performance Insights"])
-        
-        with tab1:
-            st.subheader("Win Rate Trends Over Time")
-            
-            # Prepare trend data
-            trend_data = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                week_num = int(week_key.split('_')[1])
-                total_wins = sum(1 for parlay in parlays if parlay["parlay_result"] == "WIN")
-                total_losses = sum(1 for parlay in parlays if parlay["parlay_result"] == "LOSS")
-                total = total_wins + total_losses
-                win_rate = total_wins / total * 100 if total > 0 else 0
-                
-                trend_data.append({
-                    "Week": week_num,
-                    "Win Rate": win_rate,
-                    "Total Parlays": total
-                })
-            
-            df_trends = pd.DataFrame(trend_data).sort_values("Week")
-            
-            # Rolling average visualization
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=df_trends["Week"],
-                y=df_trends["Win Rate"],
-                mode='lines+markers',
-                name='Weekly Win Rate'
-            ))
-            fig.add_trace(go.Scatter(
-                x=df_trends["Week"],
-                y=df_trends["Win Rate"].rolling(window=3).mean(),
-                mode='lines',
-                name='3-Week Moving Average',
-                line=dict(dash='dash')
-            ))
-            fig.update_layout(title="Win Rate Trends", xaxis_title="Week", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig)
-        
-        with tab2:
-            st.subheader("Correlation Analysis")
-            
-            # Analyze correlations between various metrics
-            corr_data = []
-            for week_key, parlays in self.data["parlay_history"].items():
-                for parlay in parlays:
-                    try:
-                        odds = float(parlay["total_odds"].replace('+', '').replace('-', ''))
-                    except ValueError:
-                        odds = 0
-                    wins = sum(1 for bet in parlay["bets"] if bet["result"] == "WIN")
-                    
-                    corr_data.append({
-                        "Odds": odds,
-                        "Wins": wins,
-                        "Success": 1 if parlay["parlay_result"] == "WIN" else 0
-                    })
-            
-            df_corr = pd.DataFrame(corr_data)
-            
-            if not df_corr.empty and len(df_corr) > 1:
-                # Visualization of odds vs. wins
-                fig = px.scatter(df_corr, 
-                               x="Odds", 
-                               y="Wins",
-                               color="Success",
-                               title="Correlation between Odds and Wins",
-                               labels={"Success": "Parlay Success"})
-                st.plotly_chart(fig)
-                
-                # Calculate and display correlation coefficient
-                correlation = df_corr["Odds"].corr(df_corr["Wins"])
-                st.metric("Correlation between Odds and Wins", f"{correlation:.2f}")
-            else:
-                st.warning("Not enough data for correlation analysis.")
-        
-        with tab3:
-            st.subheader("Performance Insights")
-            
-            # Analyze performance by bet type
-            bet_type_performance = defaultdict(lambda: {"wins": 0, "losses": 0})
-            for parlays in self.data["parlay_history"].values():
-                for parlay in parlays:
-                    for bet in parlay["bets"]:
-                        if bet["result"] != "PENDING":
-                            bet_type = self.classify_bet_type(bet["bet"])
-                            if bet["result"] == "WIN":
-                                bet_type_performance[bet_type]["wins"] += 1
-                            else:
-                                bet_type_performance[bet_type]["losses"] += 1
-            
-            # Calculate and display win rates by bet type
-            performance_data = []
-            for bet_type, stats in bet_type_performance.items():
-                total = stats["wins"] + stats["losses"]
-                win_rate = (stats["wins"] / total * 100) if total > 0 else 0
-                performance_data.append({
-                    "Bet Type": bet_type,
-                    "Win Rate": win_rate,
-                    "Total Bets": total
-                })
-            
-            df_performance = pd.DataFrame(performance_data)
-            
-            if not df_performance.empty:
-                # Visualization of performance by bet type
-                fig = px.bar(df_performance,
-                            x="Bet Type",
-                            y="Win Rate",
-                            color="Total Bets",
-                            title="Performance by Bet Type",
-                            labels={"Win Rate": "Win Rate (%)", "Total Bets": "Total Bets"})
-                st.plotly_chart(fig)
-            else:
-                st.warning("No performance data to display.")
-    
-    def classify_bet_type(self, bet_text):
-        """Classify bet type based on bet text."""
-        bet_text = bet_text.lower()
-        if "td scorer" in bet_text or "touchdown" in bet_text:
-            return "Touchdown Props"
-        elif "under" in bet_text or "over" in bet_text:
-            return "Totals"
-        elif "sgp" in bet_text:
-            return "Same Game Parlay"
-        elif "passing" in bet_text:
-            return "Passing Props"
-        elif "@" in bet_text and any(x in bet_text for x in ["+", "-"]):
-            return "Spread"
-        else:
-            return "Other"
-    
-    if __name__ == "__main__":
-        tracker = ParlayTracker()
+        st.warning("This action will erase all submitted bets and cannot be undone.")
+        if st.button("Reset All Bets"):
+            self.data.data["parlay_history"] = {}
+            self.data.save()
+            st.success("All bets have been reset. History is now empty.")
+
+    def parse_week_key(self, week_key):
+        try:
+            parts = week_key.split(' ')
+            week = int(parts[1])
+            year = int(parts[2])
+            return week, year
+        except (IndexError, ValueError):
+            st.error("Invalid week format.")
+            return None, None
+
+    def run(self):
+        self.setup_page()
+
+if __name__ == "__main__":
+    ParlayUI().run()
