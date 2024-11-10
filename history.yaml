@@ -1,97 +1,43 @@
 parlay_history:
-  week_1_2024:
-    - owner: Owner1
-      date: 2024-09-10
-      total_odds: +7703
-      bets:
-        - bet: "Touchdown Scorer: Player A"
-          result: "PENDING"
-          owner: "TBD"
-        - bet: "Over 45.5 Total Points in Game X"
-          result: "PENDING"
-          owner: "TBD"
-        - bet: "Spread: Team Y @ -3"
-          result: "PENDING"
-        - bet: "Passing Yards: Player B Over 250"
-          result: "PENDING"
-        - bet: "Same Game Parlay: Player C TD + Team Z Wins"
-          result: "PENDING"
-        - bet: "Under 10.5 Total Touchdowns in Game Y"
-          result: "PENDING"
-        - bet: "Spread: Team X @ +4"
-          result: "PENDING"
-        - bet: "Touchdown Scorer: Player D"
-          result: "PENDING"
-        - bet: "Over 220.5 Passing Yards in Game Z"
-          result: "PENDING"
-        - bet: "Spread: Team W @ -2"
-          result: "PENDING"
-      parlay_result: "PENDING"
-    - owner: Owner2
-      date: 2024-09-11
-      total_odds: +5000
-      bets:
-        - bet: "Touchdown Scorer: Player E"
-          result: "PENDING"
-          owner: "TBD"
-        - bet: "Under 48.5 Total Points in Game A"
-          result: "PENDING"
-        - bet: "Spread: Team V @ +5"
-          result: "PENDING"
-        - bet: "Passing Yards: Player F Over 230"
-          result: "PENDING"
-        - bet: "Same Game Parlay: Player G TD + Team U Wins"
-          result: "PENDING"
-        - bet: "Under 9.5 Total Touchdowns in Game B"
-          result: "PENDING"
-        - bet: "Spread: Team T @ -1"
-          result: "PENDING"
-        - bet: "Touchdown Scorer: Player H"
-          result: "PENDING"
-        - bet: "Over 210.5 Passing Yards in Game C"
-          result: "PENDING"
-        - bet: "Spread: Team S @ +3"
-          result: "PENDING"
-      parlay_result: "PENDING"
-  week_2_2024:
-    - owner: Owner1
-      date: 2024-09-17
-      total_odds: +6000
-      bets:
-        - bet: "Touchdown Scorer: Player I"
-          result: "WIN"
-          owner: "Owner1"
-        - bet: "Over 44.5 Total Points in Game D"
-          result: "LOSS"
-          owner: "Owner1"
-        - bet: "Spread: Team R @ -4"
-          result: "WIN"
-          owner: "Owner1"
-        - bet: "Passing Yards: Player J Over 240"
-          result: "PENDING"
-          owner: "Owner1"
-        - bet: "Same Game Parlay: Player K TD + Team Q Wins"
-          result: "WIN"
-          owner: "Owner1"
-        - bet: "Under 11.5 Total Touchdowns in Game E"
-          result: "LOSS"
-          owner: "Owner1"
-        - bet: "Spread: Team P @ +2"
-          result: "PENDING"
-          owner: "Owner1"
-        - bet: "Touchdown Scorer: Player L"
-          result: "WIN"
-          owner: "Owner1"
-        - bet: "Over 215.5 Passing Yards in Game F"
-          result: "WIN"
-          owner: "Owner1"
-        - bet: "Spread: Team O @ -3"
-          result: "LOSS"
-          owner: "Owner1"
-      parlay_result: "WIN"
+  Week 10 2024:
+  - owner: James
+    date: '2024-11-10'
+    total_odds: '+0'
+    bets:
+    - bet: Anytime TD Scorer - WR Cooper Kupp @ LA Rams
+      result: PENDING
+      owner: James
+    parlay_result: PENDING
+  Week 9 2024:
+  - owner: James
+    date: '2024-11-10'
+    total_odds: '+0'
+    bets:
+    - bet: Over 1.5 - Justin Tucker FGs @ Baltimore Ravens
+      result: WIN
+      owner: James
+    parlay_result: PENDING
+  Week 8 2024:
+  - owner: James
+    date: '2024-11-10'
+    total_odds: '+0'
+    bets:
+    - bet: Anytime TD Scorer - WR Kalif Raymond @ Detroit Lions
+      result: WIN
+      owner: James
+    parlay_result: PENDING
 settings:
   owners:
-    - Owner1
-    - Owner2
-    - Owner3
-  parlay_fee: 10
+  - James
+  - Jon
+  - Matt
+  - Pat
+  - Jack
+  - Jeff
+  - Sam/Connor
+  - Enzo
+  - Dillon
+  - Cole
+  - TBD
+  parlay_fee: 20
+  parlay_president: James Quaglia
