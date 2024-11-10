@@ -419,7 +419,7 @@ class ParlayUI:
 
 if __name__ == "__main__":
     st.set_page_config(
-        page_title="LoE Perfect Parlay",
+        page_title="LoEJ Perfect Parlay",
         page_icon="🎲",
         layout="wide"
     )
