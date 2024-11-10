@@ -84,6 +84,14 @@ class ParlayUI:
         self.analyzer = BetAnalyzer()
         
     def setup_page(self):
+        """
+        Set up the Streamlit page with sidebar navigation.
+        """
+        # Display Logo in Sidebar
+        logo_path = "logo.png"  # Ensure you have a logo.png in your project directory
+        if Path(logo_path).exists():
+            st.sidebar.image(logo_path, use_container_width=True)
+
         st.title("League of Extraordinary Jabrones")
         st.subheader("Weekly Low Scorer Parlay Tracker")
         
