@@ -3,3 +3,4 @@ PyYAML
 pandas
 plotly
 numpy
+firebase-admin
